@@ -1,0 +1,1 @@
+# Makes lightgcn a Python package

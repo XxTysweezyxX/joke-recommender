@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-# LightGCN training utilities (library module).
-
-
 from dataclasses import dataclass
 from typing import Dict, Tuple, List
 
@@ -10,7 +7,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from joke_reco.lightgcn.model import LightGCN, LightGCNConfig
+from joke_reco.lightgcn.lightgcn_model import LightGCN, LightGCNConfig
 
 
 @dataclass

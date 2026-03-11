@@ -15,14 +15,23 @@ def build_tfidf_recommender(
     use_bigrams: bool = True,
 ) -> TfidfRecommender:
     """
-    Load jokes from disk and fit a TF-IDF recommender.
+    Load the cleaned jokes file from disk and fit a TF-IDF recommender.
+
+    max_features controls the vocabulary size.
+    use_bigrams decides whether to include two-word phrases as features.
     """
+    # Path to the cleaned jokes dataset
     jokes_path = PROCESSED_DIR / "jester_jokes_clean.csv"
+
+    # Load the joke text data
     jokes_df = pd.read_csv(jokes_path)
 
+    # Fit the TF-IDF recommender on the joke text
     model = TfidfRecommender.fit(
         jokes_df=jokes_df,
         max_features=max_features,
         use_bigrams=use_bigrams,
     )
+
+    # Return the fitted model
     return model

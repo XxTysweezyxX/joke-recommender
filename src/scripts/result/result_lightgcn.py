@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 """
-Evaluate the trained LightGCN model using a shared train/test split.
+Evaluate the trained LightGCN model using the shared train/test split.
 
 Run from /src with:
     python -m scripts.result.result_lightgcn
@@ -27,39 +27,52 @@ def recommend_for_user_lightgcn(
     k: int,
 ) -> list[int]:
     """
-    Recommend top-k joke_ids for one user using dot-product scores.
+    Recommend top-k joke IDs for one user using LightGCN scores.
 
-    Excludes jokes the user already interacted with in the training set.
+    The score is the dot product between the user embedding and
+    each item embedding.
+
+    Jokes already seen in the training set are removed.
     """
+    # If the user was not part of training, no recommendation can be made
     if user_id not in user_map:
         return []
 
+    # Get this user's embedding vector
     u_idx = user_map[user_id]
-    u_vec = user_emb[u_idx]  # (D,)
+    u_vec = user_emb[u_idx]
 
-    # score all items
-    scores = torch.matmul(item_emb, u_vec)  # (num_items,)
+    # Score every item against this user
+    scores = torch.matmul(item_emb, u_vec)
 
-    # exclude training interactions for this user
+    # Get jokes this user already interacted with in training
     seen_items = set(
         train_edges.loc[train_edges["user_id"] == user_id, "joke_id"].astype(int).tolist()
     )
 
-    # convert item_map index -> raw joke_id
+    # Convert internal item index back to the original joke_id
     idx_to_item = {idx: raw_joke_id for raw_joke_id, idx in item_map.items()}
 
     candidates = []
     for item_idx in range(len(idx_to_item)):
         raw_joke_id = idx_to_item[item_idx]
+
+        # Skip jokes already seen during training
         if raw_joke_id in seen_items:
             continue
+
+        # Store candidate joke and its score
         candidates.append((raw_joke_id, float(scores[item_idx].item())))
 
+    # Rank candidates from highest score to lowest
     candidates.sort(key=lambda x: x[1], reverse=True)
+
+    # Return only the joke IDs for the top-k items
     return [joke_id for joke_id, _score in candidates[:k]]
 
 
 def main() -> None:
+    # File paths for interaction data and saved model checkpoint
     edges_path = PROCESSED_DIR / "jester_edges_clean.csv"
     model_path = ROOT / "models" / "lightgcn_jester.pt"
 
@@ -77,10 +90,12 @@ def main() -> None:
     print("[evaluate_lightgcn] Loading checkpoint...")
     ckpt = torch.load(model_path, map_location="cpu")
 
+    # Load supporting data from the checkpoint
     user_map = ckpt["user_map"]
     item_map = ckpt["item_map"]
     norm_adj = ckpt["norm_adj"]
 
+    # Rebuild the same model configuration used during training
     meta = ckpt["meta"]
     model_cfg = LightGCNConfig(
         num_users=len(user_map),
@@ -89,14 +104,16 @@ def main() -> None:
         num_layers=meta["num_layers"],
     )
 
+    # Recreate the model and load trained weights
     model = LightGCN(model_cfg)
     model.load_state_dict(ckpt["state_dict"])
     model.eval()
 
+    # Propagate through the graph to get final user/item embeddings
     with torch.no_grad():
         user_emb, item_emb = model.propagate(norm_adj)
 
-    # Only result users who have relevant held-out items
+    # Keep only users who have relevant held-out test jokes
     test_relevant = (
         test_edges[test_edges["rating"] >= config.LIKE_THRESHOLD]
         .groupby("user_id")["joke_id"]
@@ -104,15 +121,17 @@ def main() -> None:
         .to_dict()
     )
 
+    # Only evaluate users that exist in the trained model
     eligible_users = [u for u in test_relevant.keys() if u in user_map]
 
-    # Optional speed limit
+    # Optional limit on number of users evaluated
     eval_users = eligible_users[: config.EVAL_USERS]
 
     precisions = []
     recalls = []
     ndcgs = []
 
+    # Evaluate recommendations user by user
     for user_id in eval_users:
         relevant = test_relevant[user_id]
 
@@ -126,17 +145,21 @@ def main() -> None:
             k=config.K,
         )
 
+        # Skip users with no recommendations
         if not recs:
             continue
 
+        # Compute ranking metrics
         precisions.append(precision_at_k(recs, relevant, config.K))
         recalls.append(recall_at_k(recs, relevant, config.K))
         ndcgs.append(ndcg_at_k(recs, relevant, config.K))
 
+    # If nothing was evaluated, stop early
     if not precisions:
         print("[evaluate_lightgcn] No users were evaluated.")
         return
 
+    # Print final average metrics
     print(
         f"LightGCN Evaluation (users={len(precisions)}, K={config.K}, "
         f"threshold={config.LIKE_THRESHOLD}, holdout={config.HOLDOUT_PER_USER})"

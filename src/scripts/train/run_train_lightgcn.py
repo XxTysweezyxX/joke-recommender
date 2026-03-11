@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-# Runner script: loads data, trains LightGCN, saves checkpoint.
-# Run from /src with:  python -m scripts.run_train_lightgcn
+# Runner script: loads data, trains LightGCN, and saves a checkpoint.
+# Run from /src with:
+#     python -m scripts.run_train_lightgcn
 
 import pandas as pd
 import torch
@@ -13,13 +14,24 @@ from joke_reco.lightgcn.train_lightgcn import train_lightgcn
 
 
 def main() -> None:
+    """
+    Main runner for LightGCN training.
+
+    This script loads the interaction data, rebuilds the train/test split,
+    trains the LightGCN model, and saves the final checkpoint to disk.
+    """
     print("[run_train_lightgcn] Loading edges...")
 
+    # Path to the cleaned user-joke interaction file
     edges_path = PROCESSED_DIR / "jester_edges_clean.csv"
+
+    # Load all interaction rows
     edges = pd.read_csv(edges_path)
     print(f"[run_train_lightgcn] Loaded {len(edges):,} rows from {edges_path}")
 
     print("[run_train_lightgcn] Splitting train/test...")
+
+    # Recreate the same train/test split used in evaluation
     train_edges, _test_edges = train_test_split_by_user(
         edges=edges,
         like_threshold=config.LIKE_THRESHOLD,
@@ -29,6 +41,8 @@ def main() -> None:
     print(f"[run_train_lightgcn] Train rows: {len(train_edges):,}")
 
     print("[run_train_lightgcn] Training LightGCN...")
+
+    # Train the LightGCN model using the training split
     result = train_lightgcn(
         edges_train=train_edges,
         like_threshold=config.LIKE_THRESHOLD,
@@ -39,18 +53,22 @@ def main() -> None:
         epochs=10,
         samples_per_epoch=200_000,
         seed=config.SEED,
-        device="cpu",  # switch to "cuda" later if you want
+        device="cpu",  # can switch to "cuda" later if using a GPU
     )
 
+    # Create a models folder if it does not already exist
     models_dir = ROOT / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
+
+    # Output path for the saved LightGCN checkpoint
     out_path = models_dir / "lightgcn_jester.pt"
 
+    # Package everything needed to reload the trained model later
     ckpt = {
-        "state_dict": result.model.state_dict(),
-        "user_map": result.user_map,
-        "item_map": result.item_map,
-        "norm_adj": result.norm_adj.to("cpu"),
+        "state_dict": result.model.state_dict(),   # trained model weights
+        "user_map": result.user_map,               # raw user ID -> model index
+        "item_map": result.item_map,               # raw joke ID -> model index
+        "norm_adj": result.norm_adj.to("cpu"),     # graph adjacency matrix
         "meta": {
             "embedding_dim": 64,
             "num_layers": 3,
@@ -60,9 +78,11 @@ def main() -> None:
         },
     }
 
+    # Save the checkpoint to disk
     torch.save(ckpt, out_path)
     print("[run_train_lightgcn] Saved checkpoint to:", out_path)
 
 
+# Standard Python entry point
 if __name__ == "__main__":
     main()

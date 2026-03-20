@@ -4,7 +4,7 @@ from __future__ import annotations
 User-level case study for dissertation examples.
 
 Purpose:
-- Show liked vs disliked jokes for selected users
+- Show liked vs disliked jokes for 2 random users
 - Compare actual Jester ratings with LightGCN preference scores
 - Build a clean table for dissertation analysis
 
@@ -16,54 +16,75 @@ import random
 import pandas as pd
 import torch
 
+from scripts.analysis.lightgcn_score_comparison import load_trained_lightgcn
 from joke_reco.paths import PROCESSED_DIR, ROOT
 from joke_reco.evaluation_split import train_test_split_by_user
 from joke_reco import config
-from joke_reco.lightgcn.lightgcn_model import LightGCN, LightGCNConfig
 
 
 # ---------------------------------------------------------
-# Settings you can tweak
+# Editable settings
 # ---------------------------------------------------------
 CASE_STUDY_USERS = 2
-CASE_STUDY_SEED = 42
+CASE_STUDY_SEED = None   # None = different random users each run
 
 NUM_LIKED = 3
 NUM_DISLIKED = 3
 
-# Suggested dissertation thresholds for examples
 LIKE_THRESHOLD = 7.0
 DISLIKE_THRESHOLD = 0.0  # jokes rated <= 0 treated as disliked
 
 
 # ---------------------------------------------------------
-# Helper: load trained LightGCN and final embeddings
+# Helper: load joke text
 # ---------------------------------------------------------
-def load_trained_lightgcn():
-    model_path = ROOT / "models" / "lightgcn_jester.pt"
+def load_joke_text() -> pd.DataFrame:
+    jokes_path = PROCESSED_DIR / "jester_jokes_clean.csv"
+    jokes_df = pd.read_csv(jokes_path)
 
-    ckpt = torch.load(model_path, map_location="cpu")
+    jokes_df["joke_id"] = jokes_df["joke_id"].astype(int)
+    jokes_df["joke_text"] = jokes_df["joke_text"].astype(str)
 
-    user_map = ckpt["user_map"]
-    item_map = ckpt["item_map"]
-    norm_adj = ckpt["norm_adj"]
-    meta = ckpt["meta"]
+    return jokes_df[["joke_id", "joke_text"]].copy()
 
-    model_cfg = LightGCNConfig(
-        num_users=len(user_map),
-        num_items=len(item_map),
-        embedding_dim=meta["embedding_dim"],
-        num_layers=meta["num_layers"],
-    )
 
-    model = LightGCN(model_cfg)
-    model.load_state_dict(ckpt["state_dict"])
-    model.eval()
+# ---------------------------------------------------------
+# Helper: randomly pick valid users
+# ---------------------------------------------------------
+def pick_random_valid_users(
+    edges: pd.DataFrame,
+    num_users: int = 2,
+    num_liked: int = 3,
+    num_disliked: int = 3,
+    like_threshold: float = 7.0,
+    dislike_threshold: float = 0.0,
+    seed: int | None = None,
+) -> list[int]:
+    """
+    Randomly picks users who have enough liked and disliked jokes
+    for the case-study comparison.
 
-    with torch.no_grad():
-        user_emb, item_emb = model.propagate(norm_adj)
+    If seed is None, different users can be selected each run.
+    """
+    valid_users = []
 
-    return model, user_map, item_map, user_emb, item_emb
+    for user_id, group in edges.groupby("user_id"):
+        liked_count = (group["rating"] >= like_threshold).sum()
+        disliked_count = (group["rating"] <= dislike_threshold).sum()
+
+        if liked_count >= num_liked and disliked_count >= num_disliked:
+            valid_users.append(int(user_id))
+
+    if len(valid_users) < num_users:
+        raise ValueError(
+            f"Not enough valid users found. Needed {num_users}, found {len(valid_users)}."
+        )
+
+    if seed is None:
+        return random.sample(valid_users, num_users)
+
+    rng = random.Random(seed)
+    return rng.sample(valid_users, num_users)
 
 
 # ---------------------------------------------------------
@@ -100,54 +121,6 @@ def score_user_joke_pair(
 
 
 # ---------------------------------------------------------
-# Helper: load joke text
-# ---------------------------------------------------------
-def load_joke_text() -> pd.DataFrame:
-    jokes_path = PROCESSED_DIR / "jester_jokes_clean.csv"
-    jokes_df = pd.read_csv(jokes_path)
-
-    jokes_df["joke_id"] = jokes_df["joke_id"].astype(int)
-    jokes_df["joke_text"] = jokes_df["joke_text"].astype(str)
-
-    return jokes_df[["joke_id", "joke_text"]].copy()
-
-
-# ---------------------------------------------------------
-# Helper: randomly pick valid users
-# ---------------------------------------------------------
-def pick_random_valid_users(
-    edges: pd.DataFrame,
-    num_users: int = 2,
-    num_liked: int = 3,
-    num_disliked: int = 3,
-    like_threshold: float = 7.0,
-    dislike_threshold: float = 0.0,
-    seed: int = 42,
-) -> list[int]:
-    """
-    Randomly picks users who have enough liked and disliked jokes
-    for the case-study comparison.
-    """
-    valid_users = []
-
-    for user_id, group in edges.groupby("user_id"):
-        liked_count = (group["rating"] >= like_threshold).sum()
-        disliked_count = (group["rating"] <= dislike_threshold).sum()
-
-        if liked_count >= num_liked and disliked_count >= num_disliked:
-            valid_users.append(int(user_id))
-
-    if len(valid_users) < num_users:
-        raise ValueError(
-            f"Not enough valid users found. Needed {num_users}, found {len(valid_users)}."
-        )
-
-    rng = random.Random(seed)
-    selected = rng.sample(valid_users, num_users)
-    return selected
-
-
-# ---------------------------------------------------------
 # Helper: choose liked and disliked jokes for one user
 # ---------------------------------------------------------
 def build_user_examples(
@@ -164,8 +137,6 @@ def build_user_examples(
     """
     Builds a small table of liked and disliked jokes for one user.
     """
-
-    # Strong positive examples
     liked = (
         user_rows[user_rows["rating"] >= LIKE_THRESHOLD]
         .sort_values("rating", ascending=False)
@@ -173,7 +144,6 @@ def build_user_examples(
         .copy()
     )
 
-    # Clear negative / low-score examples
     disliked = (
         user_rows[user_rows["rating"] <= DISLIKE_THRESHOLD]
         .sort_values("rating", ascending=True)
@@ -189,7 +159,6 @@ def build_user_examples(
     if examples.empty:
         return pd.DataFrame()
 
-    # Score each joke with LightGCN
     examples["lightgcn_score"] = examples["joke_id"].apply(
         lambda jid: score_user_joke_pair(
             user_id=user_id,
@@ -201,10 +170,8 @@ def build_user_examples(
         )
     )
 
-    # Add joke text
     examples = examples.merge(jokes_df, on="joke_id", how="left")
 
-    # Keep output tidy
     examples["user_id"] = int(user_id)
     examples = examples[
         ["user_id", "group", "joke_id", "rating", "lightgcn_score", "joke_text"]
@@ -234,7 +201,7 @@ def main() -> None:
     jokes_df = load_joke_text()
 
     print("[case_study] Loading trained LightGCN...")
-    _model, user_map, item_map, user_emb, item_emb = load_trained_lightgcn()
+    user_map, item_map, user_emb, item_emb = load_trained_lightgcn()
 
     print("[case_study] Selecting random valid users...")
     selected_users = pick_random_valid_users(
@@ -254,7 +221,6 @@ def main() -> None:
     for user_id in selected_users:
         print(f"[case_study] Building examples for user {user_id}...")
 
-        # Use full interaction history for liked/disliked examples
         user_rows = edges[edges["user_id"] == user_id].copy()
 
         if user_rows.empty:
@@ -285,7 +251,6 @@ def main() -> None:
 
     final_df = pd.concat(all_tables, ignore_index=True)
 
-    # Shorten joke text for easier reading in terminal / dissertation export
     final_df["joke_preview"] = (
         final_df["joke_text"]
         .str.replace(r"\s+", " ", regex=True)
@@ -299,7 +264,6 @@ def main() -> None:
         ].to_string(index=False)
     )
 
-    # Save full table for dissertation use
     out_path = ROOT / "outputs" / "lightgcn_user_case_study.csv"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     final_df.to_csv(out_path, index=False)

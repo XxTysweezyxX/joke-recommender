@@ -4,7 +4,7 @@ from __future__ import annotations
 User-level case study for dissertation examples.
 
 Purpose:
-- Show liked vs disliked jokes for 2 random users
+- Show liked vs disliked jokes for fixed users
 - Compare actual Jester ratings with LightGCN preference scores
 - Build a clean table for dissertation analysis
 
@@ -12,7 +12,6 @@ Run from /src with:
     python -m scripts.analysis.user_case_study_lightgcn
 """
 
-import random
 import pandas as pd
 import torch
 
@@ -25,8 +24,7 @@ from joke_reco import config
 # ---------------------------------------------------------
 # Editable settings
 # ---------------------------------------------------------
-CASE_STUDY_USERS = 2
-CASE_STUDY_SEED = None   # None = different random users each run
+FIXED_USERS = [17698, 2119, 10386, 11866]
 
 NUM_LIKED = 3
 NUM_DISLIKED = 3
@@ -46,45 +44,6 @@ def load_joke_text() -> pd.DataFrame:
     jokes_df["joke_text"] = jokes_df["joke_text"].astype(str)
 
     return jokes_df[["joke_id", "joke_text"]].copy()
-
-
-# ---------------------------------------------------------
-# Helper: randomly pick valid users
-# ---------------------------------------------------------
-def pick_random_valid_users(
-    edges: pd.DataFrame,
-    num_users: int = 2,
-    num_liked: int = 3,
-    num_disliked: int = 3,
-    like_threshold: float = 7.0,
-    dislike_threshold: float = 0.0,
-    seed: int | None = None,
-) -> list[int]:
-    """
-    Randomly picks users who have enough liked and disliked jokes
-    for the case-study comparison.
-
-    If seed is None, different users can be selected each run.
-    """
-    valid_users = []
-
-    for user_id, group in edges.groupby("user_id"):
-        liked_count = (group["rating"] >= like_threshold).sum()
-        disliked_count = (group["rating"] <= dislike_threshold).sum()
-
-        if liked_count >= num_liked and disliked_count >= num_disliked:
-            valid_users.append(int(user_id))
-
-    if len(valid_users) < num_users:
-        raise ValueError(
-            f"Not enough valid users found. Needed {num_users}, found {len(valid_users)}."
-        )
-
-    if seed is None:
-        return random.sample(valid_users, num_users)
-
-    rng = random.Random(seed)
-    return rng.sample(valid_users, num_users)
 
 
 # ---------------------------------------------------------
@@ -203,16 +162,8 @@ def main() -> None:
     print("[case_study] Loading trained LightGCN...")
     user_map, item_map, user_emb, item_emb = load_trained_lightgcn()
 
-    print("[case_study] Selecting random valid users...")
-    selected_users = pick_random_valid_users(
-        edges=edges,
-        num_users=CASE_STUDY_USERS,
-        num_liked=NUM_LIKED,
-        num_disliked=NUM_DISLIKED,
-        like_threshold=LIKE_THRESHOLD,
-        dislike_threshold=DISLIKE_THRESHOLD,
-        seed=CASE_STUDY_SEED,
-    )
+    print("[case_study] Using fixed users...")
+    selected_users = FIXED_USERS
 
     print(f"[case_study] Selected users: {selected_users}")
 
@@ -258,11 +209,19 @@ def main() -> None:
     )
 
     print("\n=== USER CASE STUDY TABLE ===")
-    print(
-        final_df[
-            ["user_id", "group", "joke_id", "rating", "lightgcn_score", "joke_preview"]
-        ].to_string(index=False)
-    )
+
+    for user_id in selected_users:
+        user_df = final_df[final_df["user_id"] == user_id].copy()
+
+        print("\n" + "=" * 100)
+        print(f"USER {user_id} | liked vs disliked jokes")
+        print("=" * 100)
+
+        print(
+            user_df[
+                ["group", "joke_id", "rating", "lightgcn_score", "joke_preview"]
+            ].to_string(index=False)
+        )
 
     out_path = ROOT / "outputs" / "lightgcn_user_case_study.csv"
     out_path.parent.mkdir(parents=True, exist_ok=True)

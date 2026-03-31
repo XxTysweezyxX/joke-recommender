@@ -9,6 +9,12 @@ This version keeps the structure clean and class-based:
 - recommend_for_user_no_duplicates() adds a simple diversity filter
 """
 
+"""Note:
+This TF-IDF baseline is built using scikit-learn's TfidfVectorizer
+as the core text feature extraction method. The surrounding class
+structure, user-level recommendation logic, and diversity filtering
+were developed and adapted for this project. :contentReference[oaicite:1]{index=1}"""
+
 from dataclasses import dataclass
 from typing import List, Tuple, Dict
 

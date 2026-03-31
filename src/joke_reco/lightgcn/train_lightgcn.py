@@ -1,5 +1,20 @@
 from __future__ import annotations
 
+"""
+LightGCN training utilities for the joke recommender project.
+
+Purpose:
+- Build the user/item index mappings
+- Construct the normalised bipartite graph
+- Sample training triplets for BPR loss
+- Train the LightGCN model on positive user-joke interactions
+
+Note:
+Initial scaffolding and some implementation support for this training
+module were developed with AI assistance. The code was then reviewed,
+adapted, and validated for use in this project.
+"""
+
 from dataclasses import dataclass
 from typing import Dict, Tuple, List
 
@@ -29,12 +44,15 @@ class TrainResult:
     norm_adj: torch.Tensor  # torch sparse COO tensor
 
 
+# ---------------------------------------------------------
+# Helper: build raw ID -> model index mappings
+# ---------------------------------------------------------
 def _build_id_maps(edges_pos: pd.DataFrame) -> Tuple[Dict[int, int], Dict[int, int]]:
     """
     Converts raw user IDs and joke IDs into compact index values.
 
-    LightGCN embeddings need indices like 0, 1, 2, 3... rather than
-    the original raw IDs from the dataset.
+    LightGCN embeddings need indices like 0, 1, 2, 3...
+    rather than the original raw IDs from the dataset.
     """
     # Get unique users and unique jokes/items
     users = edges_pos["user_id"].unique().tolist()
@@ -48,6 +66,9 @@ def _build_id_maps(edges_pos: pd.DataFrame) -> Tuple[Dict[int, int], Dict[int, i
     return user_map, item_map
 
 
+# ---------------------------------------------------------
+# Helper: build the normalised bipartite graph
+# ---------------------------------------------------------
 def _build_norm_adj(
     edges_pos: pd.DataFrame,
     user_map: Dict[int, int],
@@ -62,7 +83,7 @@ def _build_norm_adj(
              [R^T, 0]]
 
     After that, it applies degree normalisation:
-        D^{-1/2} A D^{-1/2}
+        D^(-1/2) A D^(-1/2)
 
     This is the matrix used during LightGCN propagation.
     """
@@ -70,12 +91,15 @@ def _build_norm_adj(
     num_items = len(item_map)
     n = num_users + num_items  # total number of graph nodes
 
-    # These will store the row and column positions for sparse edges
+    # These store the row and column positions for sparse edges
     rows: List[int] = []
     cols: List[int] = []
 
     # Loop through every positive user-joke interaction
-    for u_raw, j_raw in zip(edges_pos["user_id"].astype(int), edges_pos["joke_id"].astype(int)):
+    for u_raw, j_raw in zip(
+        edges_pos["user_id"].astype(int),
+        edges_pos["joke_id"].astype(int)
+    ):
         # Convert raw IDs into internal model indices
         u = user_map.get(u_raw)
         it = item_map.get(j_raw)
@@ -99,28 +123,35 @@ def _build_norm_adj(
     # Build sparse adjacency matrix with value 1 for every edge
     indices = torch.tensor([rows, cols], dtype=torch.long)
     values = torch.ones(len(rows), dtype=torch.float32)
-
     adj = torch.sparse_coo_tensor(indices, values, size=(n, n)).coalesce()
 
     # Degree of each node = number of connected neighbours
     deg = torch.sparse.sum(adj, dim=1).to_dense()  # shape: (n,)
 
-    # Compute D^{-1/2}
+    # Compute D^(-1/2)
     deg_inv_sqrt = torch.pow(deg, -0.5)
 
     # Replace infinities with 0 for isolated nodes
     deg_inv_sqrt[torch.isinf(deg_inv_sqrt)] = 0.0
 
     # Apply symmetric normalisation to each edge value
-    # v_ij = v_ij * d_i^{-1/2} * d_j^{-1/2}
+    # v_ij = v_ij * d_i^(-1/2) * d_j^(-1/2)
     r, c = adj.indices()
     norm_values = adj.values() * deg_inv_sqrt[r] * deg_inv_sqrt[c]
 
     # Final normalised adjacency matrix used in graph propagation
-    norm_adj = torch.sparse_coo_tensor(adj.indices(), norm_values, size=adj.size()).coalesce()
+    norm_adj = torch.sparse_coo_tensor(
+        adj.indices(),
+        norm_values,
+        size=adj.size()
+    ).coalesce()
+
     return norm_adj
 
 
+# ---------------------------------------------------------
+# Helper: sample one BPR training batch
+# ---------------------------------------------------------
 def _sample_bpr_batch(
     user_pos_items: Dict[int, np.ndarray],
     num_users: int,
@@ -164,6 +195,9 @@ def _sample_bpr_batch(
     return users.astype(np.int64), pos, neg
 
 
+# ---------------------------------------------------------
+# Main: train LightGCN
+# ---------------------------------------------------------
 def train_lightgcn(
     edges_train: pd.DataFrame,
     like_threshold: float,
@@ -189,7 +223,10 @@ def train_lightgcn(
     # ---------------------------------------------------------
     # 1) Keep only positive interactions
     # ---------------------------------------------------------
-    edges_pos = edges_train.loc[edges_train["rating"] >= like_threshold, ["user_id", "joke_id"]].copy()
+    edges_pos = edges_train.loc[
+        edges_train["rating"] >= like_threshold,
+        ["user_id", "joke_id"]
+    ].copy()
 
     # Stop early if no positives exist
     if edges_pos.empty:
@@ -278,7 +315,11 @@ def train_lightgcn(
 
             # Compute BPR loss:
             # positive items should rank above negative items
-            loss = LightGCN.bpr_loss(user_emb[u_t], item_emb[pos_t], item_emb[neg_t])
+            loss = LightGCN.bpr_loss(
+                user_emb[u_t],
+                item_emb[pos_t],
+                item_emb[neg_t]
+            )
 
             # Backpropagation + optimiser step
             loss.backward()

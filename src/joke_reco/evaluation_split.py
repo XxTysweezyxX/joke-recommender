@@ -14,7 +14,7 @@ import pandas as pd
 
 def train_test_split_by_user(
     edges: pd.DataFrame,
-    like_threshold: float = 5.0,
+    like_threshold: float = 7.0,
     test_size: int = 2,
     seed: int = 42,
 ) -> Tuple[pd.DataFrame, pd.DataFrame]:

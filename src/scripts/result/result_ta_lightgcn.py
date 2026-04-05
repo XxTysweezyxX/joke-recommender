@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 """
-Evaluate the trained LightGCN model using the shared train/test split.
+Evaluate the trained text-augmented LightGCN model using the shared train/test split.
 
 Run from /src with:
-    python -m scripts.result.result_lightgcn
+    python -m scripts.result.result_ta_lightgcn
 """
 
 import pandas as pd
@@ -14,9 +14,13 @@ from joke_reco.paths import PROCESSED_DIR, ROOT
 from joke_reco.evaluation_split import train_test_split_by_user
 from joke_reco.metrics import precision_at_k, recall_at_k, ndcg_at_k
 from joke_reco import config
-from joke_reco.lightgcn.lightgcn_model import LightGCN, LightGCNConfig
+from joke_reco.build_joke_text_features import build_item_text_features
+from joke_reco.text_augmented_lightgcn.text_augmented_lightgcn import LightGCN, LightGCNConfig
 
 
+# ---------------------------------------------------------
+# Helper: recommend jokes for one user using LightGCN scores
+# ---------------------------------------------------------
 def recommend_for_user_lightgcn(
     user_id: int,
     train_edges: pd.DataFrame,
@@ -71,15 +75,33 @@ def recommend_for_user_lightgcn(
     return [joke_id for joke_id, _score in candidates[:k]]
 
 
+# ---------------------------------------------------------
+# Main: evaluate trained LightGCN model
+# ---------------------------------------------------------
 def main() -> None:
-    # File paths for interaction data and saved model checkpoint
-    edges_path = PROCESSED_DIR / "jester_edges_clean.csv"
-    model_path = ROOT / "models" / "lightgcn_jester.pt"
+    """
+    Main evaluation runner for the text-augmented LightGCN model.
 
-    print("[evaluate_lightgcn] Loading edges...")
+    This script:
+    1) loads the cleaned interaction data
+    2) rebuilds the shared train/test split
+    3) loads the trained LightGCN checkpoint
+    4) rebuilds joke text features in the same way as training
+    5) recreates the model and loads trained weights
+    6) evaluates top-k recommendation performance
+    """
+    # File paths for interaction data, joke text data, and saved model checkpoint
+    edges_path = PROCESSED_DIR / "jester_edges_clean.csv"
+    jokes_path = PROCESSED_DIR / "jester_jokes_clean.csv"
+    model_path = ROOT / "models" / "ta_lightgcn_jester.pt"
+
+    print("[evaluate_ta_lightgcn] Loading edges...")
     edges = pd.read_csv(edges_path)
 
-    print("[evaluate_lightgcn] Rebuilding shared train/test split...")
+    print("[evaluate_ta_lightgcn] Loading jokes...")
+    jokes = pd.read_csv(jokes_path)
+
+    print("[evaluate_ta_lightgcn] Rebuilding shared train/test split...")
     train_edges, test_edges = train_test_split_by_user(
         edges=edges,
         like_threshold=config.LIKE_THRESHOLD,
@@ -87,51 +109,59 @@ def main() -> None:
         seed=config.SEED,
     )
 
-    print("[evaluate_lightgcn] Loading checkpoint...")
+    print("[evaluate_ta_lightgcn] Loading checkpoint...")
     ckpt = torch.load(model_path, map_location="cpu")
 
-    # Load supporting data from the checkpoint
+    # ---------------------------------------------------------
+    # Load supporting data from checkpoint
+    # ---------------------------------------------------------
     user_map = ckpt["user_map"]
     item_map = ckpt["item_map"]
     norm_adj = ckpt["norm_adj"]
-
-    # Rebuild the same model configuration used during training
     meta = ckpt["meta"]
+
+    # ---------------------------------------------------------
+    # Rebuild item-side text features (same setup as training)
+    # ---------------------------------------------------------
+    print("[evaluate_ta_lightgcn] Building item text features...")
+    item_text_features, _vectorizer = build_item_text_features(
+        jokes_df=jokes,
+        item_map=item_map,
+        device="cpu",
+    )
+
+    # ---------------------------------------------------------
+    # Recreate the same model configuration used during training
+    # ---------------------------------------------------------
     model_cfg = LightGCNConfig(
         num_users=len(user_map),
         num_items=len(item_map),
         embedding_dim=meta["embedding_dim"],
         num_layers=meta["num_layers"],
+        text_feature_dim=item_text_features.shape[1],
+       # item_init_mode=meta.get("item_init_mode", "text_only"),#
+        item_init_mode=meta.get("item_init_mode", "add"),
     )
 
-    # Recreate the model
-    model = LightGCN(model_cfg)
-
-    # Keep only weights that belong to the plain/original LightGCN model
-    raw_state_dict = ckpt["state_dict"]
-    model_state_keys = set(model.state_dict().keys())
-
-    filtered_state_dict = {
-        k: v for k, v in raw_state_dict.items() if k in model_state_keys
-    }
-
-    ignored_keys = [k for k in raw_state_dict.keys() if k not in model_state_keys]
-
-    if ignored_keys:
-        print(
-            "[evaluate_lightgcn] Warning: checkpoint contains extra keys not used by "
-            f"the original LightGCN model. Ignoring: {ignored_keys}"
-        )
-
-    # Load only the matching weights
-    model.load_state_dict(filtered_state_dict, strict=False)
+    # ---------------------------------------------------------
+    # Recreate the model and load trained weights
+    # ---------------------------------------------------------
+    model = LightGCN(
+        model_cfg,
+        item_text_features=item_text_features,
+    )
+    model.load_state_dict(ckpt["state_dict"])
     model.eval()
 
-    # Propagate through the graph to get final user/item embeddings
+    # ---------------------------------------------------------
+    # Run propagation to get final user/item embeddings
+    # ---------------------------------------------------------
     with torch.no_grad():
         user_emb, item_emb = model.propagate(norm_adj)
 
-    # Keep only users who have relevant held-out test jokes
+    # ---------------------------------------------------------
+    # Build relevant held-out test jokes per user
+    # ---------------------------------------------------------
     test_relevant = (
         test_edges[test_edges["rating"] >= config.LIKE_THRESHOLD]
         .groupby("user_id")["joke_id"]
@@ -149,7 +179,9 @@ def main() -> None:
     recalls = []
     ndcgs = []
 
+    # ---------------------------------------------------------
     # Evaluate recommendations user by user
+    # ---------------------------------------------------------
     for user_id in eval_users:
         relevant = test_relevant[user_id]
 
@@ -172,14 +204,18 @@ def main() -> None:
         recalls.append(recall_at_k(recs, relevant, config.K))
         ndcgs.append(ndcg_at_k(recs, relevant, config.K))
 
-    # If nothing was evaluated, stop early
+    # ---------------------------------------------------------
+    # Handle empty evaluation case
+    # ---------------------------------------------------------
     if not precisions:
-        print("[evaluate_lightgcn] No users were evaluated.")
+        print("[evaluate_ta_lightgcn] No users were evaluated.")
         return
 
+    # ---------------------------------------------------------
     # Print final average metrics
+    # ---------------------------------------------------------
     print(
-        f"LightGCN Evaluation (users={len(precisions)}, K={config.K}, "
+        f"Text Augmented LightGCN Evaluation (users={len(precisions)}, K={config.K}, "
         f"threshold={config.LIKE_THRESHOLD}, holdout={config.HOLDOUT_PER_USER})"
     )
     print(f"Precision@{config.K}: {sum(precisions) / len(precisions):.4f}")
@@ -187,5 +223,8 @@ def main() -> None:
     print(f"NDCG@{config.K}:      {sum(ndcgs) / len(ndcgs):.4f}")
 
 
+# ---------------------------------------------------------
+# Standard Python entry point
+# ---------------------------------------------------------
 if __name__ == "__main__":
     main()

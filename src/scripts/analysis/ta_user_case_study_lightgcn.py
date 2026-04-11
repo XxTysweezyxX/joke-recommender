@@ -18,7 +18,8 @@ import torch
 from joke_reco.paths import PROCESSED_DIR, ROOT
 from joke_reco.evaluation_split import train_test_split_by_user
 from joke_reco import config
-from scripts.analysis.ta_lightgcn_preference_separation import load_trained_ta_lightgcn
+from joke_reco.text_augmented_lightgcn.build_joke_text_features import build_item_text_features
+from joke_reco.text_augmented_lightgcn.text_augmented_lightgcn import LightGCN, LightGCNConfig
 
 
 # ---------------------------------------------------------
@@ -47,6 +48,69 @@ def load_joke_text() -> pd.DataFrame:
     jokes_df["joke_text"] = jokes_df["joke_text"].astype(str)
 
     return jokes_df[["joke_id", "joke_text"]].copy()
+
+
+# ---------------------------------------------------------
+# Helper: load trained text-augmented LightGCN
+# ---------------------------------------------------------
+def load_trained_ta_lightgcn() -> tuple[dict[int, int], dict[int, int], torch.Tensor, torch.Tensor]:
+    """
+    Load the trained text-augmented LightGCN checkpoint and rebuild the
+    final propagated user/item embeddings.
+
+    Returns:
+    - user_map
+    - item_map
+    - final user embeddings
+    - final item embeddings
+    """
+    model_path = ROOT / "models" / "ta_lightgcn_jester.pt"
+    jokes_path = PROCESSED_DIR / "jester_jokes_clean.csv"
+
+    print("[ta_case_study] Loading checkpoint...")
+    ckpt = torch.load(model_path, map_location="cpu")
+
+    # Load supporting data saved during training
+    user_map = ckpt["user_map"]
+    item_map = ckpt["item_map"]
+    norm_adj = ckpt["norm_adj"]
+    meta = ckpt["meta"]
+
+    # Rebuild joke text features in the same way as training
+    print("[ta_case_study] Rebuilding joke text features...")
+    jokes_df = pd.read_csv(jokes_path)
+
+    item_text_features, _ = build_item_text_features(
+        jokes_df=jokes_df,
+        item_map=item_map,
+        device="cpu",
+    )
+
+    # Recreate the same model configuration used during training
+    print("[ta_case_study] Recreating model...")
+    model_cfg = LightGCNConfig(
+        num_users=len(user_map),
+        num_items=len(item_map),
+        embedding_dim=meta["embedding_dim"],
+        num_layers=meta["num_layers"],
+        text_feature_dim=item_text_features.shape[1],
+    )
+
+    model = LightGCN(
+        model_cfg,
+        item_text_features=item_text_features,
+    )
+
+    # Load learned weights
+    model.load_state_dict(ckpt["state_dict"])
+    model.eval()
+
+    # Run propagation to get final user/item embeddings
+    print("[ta_case_study] Running propagation...")
+    with torch.no_grad():
+        user_emb, item_emb = model.propagate(norm_adj)
+
+    return user_map, item_map, user_emb, item_emb
 
 
 # ---------------------------------------------------------
@@ -121,9 +185,7 @@ def build_user_examples(
     if examples.empty:
         return pd.DataFrame()
 
-    # The only real change from the original case study is that these scores come
-    # from the text-augmented LightGCN model, which already has joke text features
-    # built into the item representations.
+    # Score each selected joke using the final TA-LightGCN embeddings
     examples["ta_lightgcn_score"] = examples["joke_id"].apply(
         lambda jid: score_user_joke_pair(
             user_id=user_id,
@@ -135,6 +197,7 @@ def build_user_examples(
         )
     )
 
+    # Add the joke text for dissertation display
     examples = examples.merge(jokes_df, on="joke_id", how="left")
 
     examples["user_id"] = int(user_id)

@@ -164,25 +164,3 @@ def build_item_text_features(
     )
 
     return item_text_features, vectorizer
-
-
-# ---------------------------------------------------------
-# Optional runner: quick standalone check
-# ---------------------------------------------------------
-def main() -> None:
-    """
-    Optional local test runner.
-
-    This can be adapted later if you want to quickly inspect:
-    - feature matrix shape
-    - vocabulary size
-    - whether the output looks correct
-    """
-    print("This module is intended to be imported from LightGCN training code.")
-
-
-# ---------------------------------------------------------
-# Standard Python entry point
-# ---------------------------------------------------------
-if __name__ == "__main__":
-    main()

@@ -14,7 +14,7 @@ from joke_reco.paths import PROCESSED_DIR, ROOT
 from joke_reco.evaluation_split import train_test_split_by_user
 from joke_reco.metrics import precision_at_k, recall_at_k, ndcg_at_k
 from joke_reco import config
-from joke_reco.build_joke_text_features import build_item_text_features
+from joke_reco.text_augmented_lightgcn.build_joke_text_features import build_item_text_features
 from joke_reco.text_augmented_lightgcn.text_augmented_lightgcn import LightGCN, LightGCNConfig
 
 
@@ -139,8 +139,6 @@ def main() -> None:
         embedding_dim=meta["embedding_dim"],
         num_layers=meta["num_layers"],
         text_feature_dim=item_text_features.shape[1],
-       # item_init_mode=meta.get("item_init_mode", "text_only"),#
-        item_init_mode=meta.get("item_init_mode", "add"),
     )
 
     # ---------------------------------------------------------

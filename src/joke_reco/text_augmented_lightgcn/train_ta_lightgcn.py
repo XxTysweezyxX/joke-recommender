@@ -23,7 +23,7 @@ import pandas as pd
 import torch
 
 from joke_reco.text_augmented_lightgcn.text_augmented_lightgcn import LightGCN, LightGCNConfig
-from joke_reco.build_joke_text_features import build_item_text_features
+from joke_reco.text_augmented_lightgcn.build_joke_text_features import build_item_text_features
 
 
 @dataclass
@@ -282,8 +282,6 @@ def train_ta_lightgcn(
         embedding_dim=embedding_dim,
         num_layers=num_layers,
         text_feature_dim=item_text_features.shape[1],
-        #item_init_mode='text_only',#
-        item_init_mode= "add",
     )
 
     # Create the LightGCN model

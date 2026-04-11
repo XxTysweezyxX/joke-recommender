@@ -47,14 +47,14 @@ class TfidfRecommender:
     id_to_idx: Dict[int, int]
 
     # ---------------------------------------------------------
-    # Class method: fit TF-IDF model from joke text
+    # 1. Class method: Fit TF-IDF model from joke text
     # ---------------------------------------------------------
     @classmethod
     def fit(
-        cls,
-        jokes_df: pd.DataFrame,
-        max_features: int = 5000,
-        use_bigrams: bool = True,
+            cls,
+            jokes_df: pd.DataFrame,
+            max_features: int = 5000,
+            use_bigrams: bool = True,
     ) -> "TfidfRecommender":
         """
         Fit a TF-IDF model on the joke text.
@@ -67,35 +67,35 @@ class TfidfRecommender:
         use_bigrams controls whether two-word phrases are included.
         """
 
-        # Keep only the columns needed for TF-IDF
+        # Keep only the columns needed for the TF-IDF model.
         jokes_df = jokes_df[["joke_id", "joke_text"]].copy()
 
-        # Make sure joke text is treated as strings
+        # Convert all joke text values to strings so the vectorizer can process them safely.
         jokes_df["joke_text"] = jokes_df["joke_text"].astype(str)
 
-        # Sort by joke_id so row order stays stable and reproducible
+        # Sort by joke_id so the row order stays stable and reproducible.
         jokes_df = jokes_df.sort_values("joke_id").reset_index(drop=True)
 
-        # Use either unigrams only or unigrams + bigrams
+        # Use either single words only, or single words and two-word phrases.
         ngram_range = (1, 2) if use_bigrams else (1, 1)
 
-        # Build the TF-IDF vectorizer
+        # Build the TF-IDF vectorizer.
         vectorizer = TfidfVectorizer(
-            stop_words="english",
-            max_features=max_features,
-            ngram_range=ngram_range,
+            stop_words="english",  # Remove very common English words.
+            max_features=max_features,  # Limit the vocabulary size.
+            ngram_range=ngram_range,  # Include unigrams only, or unigrams + bigrams.
         )
 
-        # Convert joke text into TF-IDF vectors
+        # Convert all joke texts into TF-IDF vectors.
         tfidf_matrix = vectorizer.fit_transform(jokes_df["joke_text"])
 
-        # Store joke IDs in the same order as the matrix rows
+        # Store joke IDs in the same order as the TF-IDF matrix rows.
         joke_ids = jokes_df["joke_id"].to_numpy(dtype=int)
 
-        # Build lookup from joke_id -> TF-IDF row index
+        # Build a lookup from joke_id to its row index in the TF-IDF matrix.
         id_to_idx = {int(jid): int(i) for i, jid in enumerate(joke_ids)}
 
-        # Return fitted recommender object
+        # Return the fitted recommender with all TF-IDF components stored.
         return cls(
             vectorizer=vectorizer,
             tfidf_matrix=tfidf_matrix,
@@ -104,14 +104,14 @@ class TfidfRecommender:
         )
 
     # ---------------------------------------------------------
-    # Recommend jokes for one user
+    # 2. Recommend jokes for one user
     # ---------------------------------------------------------
     def recommend_for_user(
         self,
         edges_df: pd.DataFrame,
         user_id: int,
         k: int = 5,
-        like_threshold: float = 5.0,
+        like_threshold: float = 7.0,
         fallback_top_n: int = 3,
     ) -> List[Tuple[int, float]]:
         """
@@ -132,10 +132,10 @@ class TfidfRecommender:
         if user_rows.empty:
             return []
 
-        # Jokes this user has already rated
+        # Track jokes the user has already rated so they are not recommended again.
         seen_jokes = set(user_rows["joke_id"].astype(int).tolist())
 
-        # Jokes treated as "liked" based on the threshold
+        # Keep only jokes rated above the chosen threshold as liked jokes. (7)
         liked_jokes = (
             user_rows.loc[user_rows["rating"] >= like_threshold, "joke_id"]
             .astype(int)

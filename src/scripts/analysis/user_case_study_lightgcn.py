@@ -15,10 +15,8 @@ Run from /src with:
 import pandas as pd
 import torch
 
-from scripts.analysis.lightgcn_prefrence_separation import load_trained_lightgcn
 from joke_reco.paths import PROCESSED_DIR, ROOT
-from joke_reco.evaluation_split import train_test_split_by_user
-from joke_reco import config
+from joke_reco.lightgcn.lightgcn_model import LightGCN, LightGCNConfig
 
 
 # ---------------------------------------------------------
@@ -32,18 +30,104 @@ NUM_DISLIKED = 3
 LIKE_THRESHOLD = 7.0
 DISLIKE_THRESHOLD = 0.0  # jokes rated <= 0 treated as disliked
 
+OUTPUT_FILENAME = "lightgcn_user_case_study.csv"
+
+
+# ---------------------------------------------------------
+# Helper: load cleaned ratings
+# ---------------------------------------------------------
+def load_edges() -> pd.DataFrame:
+    """
+    Load the cleaned Jester interaction data.
+    """
+    edges_path = PROCESSED_DIR / "jester_edges_clean.csv"
+
+    if not edges_path.exists():
+        raise FileNotFoundError(f"Edges file not found: {edges_path}")
+
+    edges = pd.read_csv(edges_path).copy()
+    edges["user_id"] = edges["user_id"].astype(int)
+    edges["joke_id"] = edges["joke_id"].astype(int)
+    edges["rating"] = edges["rating"].astype(float)
+
+    return edges
+
 
 # ---------------------------------------------------------
 # Helper: load joke text
 # ---------------------------------------------------------
 def load_joke_text() -> pd.DataFrame:
+    """
+    Load the cleaned joke text file.
+    """
     jokes_path = PROCESSED_DIR / "jester_jokes_clean.csv"
-    jokes_df = pd.read_csv(jokes_path)
 
+    if not jokes_path.exists():
+        raise FileNotFoundError(f"Jokes file not found: {jokes_path}")
+
+    jokes_df = pd.read_csv(jokes_path).copy()
     jokes_df["joke_id"] = jokes_df["joke_id"].astype(int)
     jokes_df["joke_text"] = jokes_df["joke_text"].astype(str)
 
     return jokes_df[["joke_id", "joke_text"]].copy()
+
+
+# ---------------------------------------------------------
+# Helper: load trained original LightGCN
+# ---------------------------------------------------------
+def load_trained_lightgcn() -> tuple[dict[int, int], dict[int, int], torch.Tensor, torch.Tensor]:
+    """
+    Reload the trained original LightGCN model and return
+    propagated user/item embeddings.
+    """
+    model_path = ROOT / "models" / "lightgcn_jester.pt"
+
+    if not model_path.exists():
+        raise FileNotFoundError(f"Checkpoint not found: {model_path}")
+
+    print(f"[case_study] Loading checkpoint: {model_path}")
+    ckpt = torch.load(model_path, map_location="cpu")
+
+    user_map = ckpt["user_map"]
+    item_map = ckpt["item_map"]
+    norm_adj = ckpt["norm_adj"]
+    meta = ckpt["meta"]
+
+    print("[case_study] Recreating original LightGCN model...")
+    model_cfg = LightGCNConfig(
+        num_users=len(user_map),
+        num_items=len(item_map),
+        embedding_dim=meta["embedding_dim"],
+        num_layers=meta["num_layers"],
+    )
+
+    model = LightGCN(model_cfg)
+
+    # Safer checkpoint loading:
+    # keep only keys that belong to the plain/original LightGCN model
+    raw_state_dict = ckpt["state_dict"]
+    model_state_keys = set(model.state_dict().keys())
+
+    filtered_state_dict = {
+        k: v for k, v in raw_state_dict.items() if k in model_state_keys
+    }
+
+    ignored_keys = [k for k in raw_state_dict.keys() if k not in model_state_keys]
+
+    if ignored_keys:
+        print(
+            "[case_study] Warning: checkpoint contains extra keys not used by "
+            f"the original LightGCN model. Ignoring: {ignored_keys}"
+        )
+
+    model.load_state_dict(filtered_state_dict, strict=False)
+    model.eval()
+
+    print("[case_study] Running propagation...")
+    with torch.no_grad():
+        user_emb, item_emb = model.propagate(norm_adj)
+
+    return user_map, item_map, user_emb, item_emb
 
 
 # ---------------------------------------------------------
@@ -58,7 +142,7 @@ def score_user_joke_pair(
     item_emb: torch.Tensor,
 ) -> float | None:
     """
-    Returns the LightGCN preference score for one user-joke pair.
+    Return the LightGCN preference score for one user-joke pair.
 
     Important:
     This is NOT a predicted Jester rating.
@@ -72,10 +156,9 @@ def score_user_joke_pair(
     u_idx = user_map[user_id]
     i_idx = item_map[joke_id]
 
-    u_vec = user_emb[u_idx]
-    i_vec = item_emb[i_idx]
+    with torch.no_grad():
+        score = torch.dot(user_emb[u_idx], item_emb[i_idx]).item()
 
-    score = torch.dot(u_vec, i_vec).item()
     return float(score)
 
 
@@ -94,7 +177,7 @@ def build_user_examples(
     num_disliked: int = 3,
 ) -> pd.DataFrame:
     """
-    Builds a small table of liked and disliked jokes for one user.
+    Build a small table of liked and disliked jokes for one user.
     """
     liked = (
         user_rows[user_rows["rating"] >= LIKE_THRESHOLD]
@@ -140,31 +223,38 @@ def build_user_examples(
 
 
 # ---------------------------------------------------------
+# Pretty print one user table
+# ---------------------------------------------------------
+def print_user_case_study(user_id: int, user_df: pd.DataFrame) -> None:
+    """
+    Print one user's case study in a cleaner format.
+    """
+    print("\n" + "=" * 100)
+    print(f"USER {user_id} | liked vs disliked jokes")
+    print("=" * 100)
+
+    print(
+        user_df[
+            ["group", "joke_id", "rating", "lightgcn_score", "joke_preview"]
+        ].to_string(index=False)
+    )
+
+
+# ---------------------------------------------------------
 # Main
 # ---------------------------------------------------------
 def main() -> None:
-    edges_path = PROCESSED_DIR / "jester_edges_clean.csv"
-
     print("[case_study] Loading edges...")
-    edges = pd.read_csv(edges_path)
-
-    print("[case_study] Rebuilding shared train/test split...")
-    _train_edges, _test_edges = train_test_split_by_user(
-        edges=edges,
-        like_threshold=config.LIKE_THRESHOLD,
-        test_size=config.HOLDOUT_PER_USER,
-        seed=config.SEED,
-    )
+    edges = load_edges()
 
     print("[case_study] Loading jokes...")
     jokes_df = load_joke_text()
 
-    print("[case_study] Loading trained LightGCN...")
+    print("[case_study] Loading trained original LightGCN...")
     user_map, item_map, user_emb, item_emb = load_trained_lightgcn()
 
     print("[case_study] Using fixed users...")
     selected_users = FIXED_USERS
-
     print(f"[case_study] Selected users: {selected_users}")
 
     all_tables = []
@@ -204,11 +294,12 @@ def main() -> None:
 
     final_df["joke_preview"] = (
         final_df["joke_text"]
+        .fillna("")
         .str.replace(r"\s+", " ", regex=True)
         .str.slice(0, 140)
     )
 
-    print("\n=== USER CASE STUDY TABLE ===")
+    print("\n=== ORIGINAL LIGHTGCN USER CASE STUDY TABLE ===")
 
     for user_id in selected_users:
         user_df = final_df[final_df["user_id"] == user_id].copy()
@@ -216,17 +307,9 @@ def main() -> None:
         if user_df.empty:
             continue
 
-        print("\n" + "=" * 100)
-        print(f"USER {user_id} | liked vs disliked jokes")
-        print("=" * 100)
+        print_user_case_study(user_id, user_df)
 
-        print(
-            user_df[
-                ["group", "joke_id", "rating", "lightgcn_score", "joke_preview"]
-            ].to_string(index=False)
-        )
-
-    out_path = ROOT / "outputs" / "lightgcn_user_case_study.csv"
+    out_path = ROOT / "outputs" / OUTPUT_FILENAME
     out_path.parent.mkdir(parents=True, exist_ok=True)
     final_df.to_csv(out_path, index=False)
 

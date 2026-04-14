@@ -1,17 +1,8 @@
 from __future__ import annotations
 
 """
-Build / fit the TF-IDF recommender for the joke dataset.
-
-Purpose:
-- Load the cleaned jokes dataset from disk
-- Fit the TF-IDF recommender on joke text
-- Return the fitted model for later recommendation and evaluation
-
-Note:
-Initial scaffolding and some implementation support for this module
-were developed with AI assistance. The code was then reviewed,
-adapted, and validated for use in this project.
+Builds and fits the TF-IDF recommender for the joke dataset.
+Loads the cleaned joke text and returns a fitted TF-IDF model for later use.
 """
 
 import pandas as pd
@@ -21,22 +12,17 @@ from joke_reco.tfidf.tfidf_model import TfidfRecommender
 
 
 # ---------------------------------------------------------
-# Helper: build the fitted TF-IDF recommender
+# 1. TF-IDF recommender builder
+# Loads the cleaned joke text and fits the TF-IDF model.
 # ---------------------------------------------------------
 def build_tfidf_recommender(
     max_features: int = 5000,
     use_bigrams: bool = True,
 ) -> TfidfRecommender:
-    """
-    Load the cleaned jokes file from disk and fit a TF-IDF recommender.
-
-    max_features controls the vocabulary size.
-    use_bigrams decides whether to include two-word phrases as features.
-    """
-    # Path to the cleaned jokes dataset
+    # Build the path to the cleaned jokes file
     jokes_path = PROCESSED_DIR / "jester_jokes_clean.csv"
 
-    # Load the joke text data
+    # Load the cleaned joke text data
     jokes_df = pd.read_csv(jokes_path)
 
     # Fit the TF-IDF recommender on the joke text
@@ -46,5 +32,5 @@ def build_tfidf_recommender(
         use_bigrams=use_bigrams,
     )
 
-    # Return the fitted model
+    # Return the fitted recommender
     return model

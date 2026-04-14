@@ -1,22 +1,8 @@
 from __future__ import annotations
 
 """
-Text-augmented LightGCN model definition for the joke recommender project.
-
-This version is simplified so that item representations always use:
-
-    learned item embedding + projected text embedding
-
-The original LightGCN parts are still present:
-- learnable user embeddings
-- learnable item embeddings
-- graph propagation
-- layer averaging
-- BPR loss
-
-The new text-augmented part is:
-- encode joke text features into embedding space
-- add them to the learned item embeddings before propagation
+Defines the text-augmented LightGCN recommender.
+Combines learned item embeddings with projected joke text features before graph propagation.
 """
 
 from dataclasses import dataclass
@@ -28,23 +14,18 @@ import torch.nn.functional as F
 
 
 # ---------------------------------------------------------
-# Configuration
-# Same idea as original LightGCN, with one extra field
-# for the dimension of joke text features
+# 1. Configuration
+# Stores the main model settings, including text feature size.
 # ---------------------------------------------------------
 @dataclass
 class LightGCNConfig:
-    """
-    Stores the configuration for the text-augmented LightGCN model.
-    """
-
     # Number of users in the dataset
     num_users: int
 
     # Number of joke items in the dataset
     num_items: int
 
-    # Size of the embedding vectors used by the model
+    # Size of each embedding vector
     embedding_dim: int = 64
 
     # Number of graph propagation layers
@@ -55,50 +36,33 @@ class LightGCNConfig:
 
 
 # ---------------------------------------------------------
-# NEW: Text augmentation component
-# Converts joke text features into the same embedding space
-# used by the LightGCN model
+# 2. Text encoder
+# Projects joke text features into the model embedding space.
 # ---------------------------------------------------------
+# AI-assisted section:
+# ChatGPT helped with the design of this text augmentation part.
+# Prompt summary: "Help me implement a text-augmented LightGCN
+# where TF-IDF joke features are projected into the embedding
+# space and added to item embeddings."
 class JokeTextEncoder(nn.Module):
-    """
-    Projects joke text feature vectors into LightGCN embedding space.
-
-    Input shape:
-        (num_items, text_feature_dim)
-
-    Output shape:
-        (num_items, embedding_dim)
-    """
-
+    # Convert raw text features into embedding-space vectors
     def __init__(self, text_feature_dim: int, embedding_dim: int):
         super().__init__()
 
-        # Linear layer that maps raw text features
-        # into the graph embedding space
+        # Linear projection from text space to embedding space
         self.proj = nn.Linear(text_feature_dim, embedding_dim)
 
+    # Run the projection layer on the text features
     def forward(self, text_features: torch.Tensor) -> torch.Tensor:
-        # Convert joke text features into embedding-space vectors
         return self.proj(text_features)
 
 
 # ---------------------------------------------------------
-# Model: Text-augmented LightGCN
+# 3. Main model
+# Defines the text-augmented LightGCN recommender.
 # ---------------------------------------------------------
 class LightGCN(nn.Module):
-    """
-    A simplified text-augmented LightGCN recommender.
-
-    Structure:
-    1) Create normal user embeddings         (same as original LightGCN)
-    2) Create normal item embeddings         (same as original LightGCN)
-    3) Encode joke text features             (new)
-    4) Add text embedding to item embedding  (new)
-    5) Propagate through the graph           (same as original LightGCN)
-    6) Average all layer outputs             (same as original LightGCN)
-    7) Train with BPR loss                   (same as original LightGCN)
-    """
-
+    # Create the model and its components
     def __init__(
         self,
         cfg: LightGCNConfig,
@@ -107,23 +71,22 @@ class LightGCN(nn.Module):
         super().__init__()
         self.cfg = cfg
 
-        # =========================================================
-        # SAME AS ORIGINAL LIGHTGCN:
-        # trainable user and item embeddings
-        # =========================================================
+        # Create learnable user embeddings
         self.user_emb = nn.Embedding(cfg.num_users, cfg.embedding_dim)
+
+        # Create learnable item embeddings
         self.item_emb = nn.Embedding(cfg.num_items, cfg.embedding_dim)
 
-        # Initialise embeddings with small random values
+        # Initialise user embeddings with small random values
         nn.init.normal_(self.user_emb.weight, std=0.1)
+
+        # Initialise item embeddings with small random values
         nn.init.normal_(self.item_emb.weight, std=0.1)
 
-        # =========================================================
-        # NEW: TEXT-AUGMENTED PART
-        # store joke text features and create text encoder
-        # =========================================================
+        # Check whether text features are available
         self.has_text_features = item_text_features is not None and cfg.text_feature_dim > 0
 
+        # Set up the text augmentation components if text exists
         if self.has_text_features:
             # Check that the number of joke rows matches the number of items
             if item_text_features.size(0) != cfg.num_items:
@@ -132,105 +95,80 @@ class LightGCN(nn.Module):
                     f"but cfg.num_items is {cfg.num_items}."
                 )
 
-            # Check that the text feature width matches config
+            # Check that the text feature width matches the config
             if item_text_features.size(1) != cfg.text_feature_dim:
                 raise ValueError(
                     f"item_text_features has dim {item_text_features.size(1)}, "
                     f"but cfg.text_feature_dim is {cfg.text_feature_dim}."
                 )
 
-            # Store raw joke text features with the model
-            # These are fixed inputs, not trainable embeddings
+            # Store the fixed joke text features with the model
             self.register_buffer("item_text_features", item_text_features)
 
-            # Text encoder: converts raw joke text features
-            # into the same embedding space as LightGCN
+            # Create the text encoder
             self.text_encoder = JokeTextEncoder(
                 text_feature_dim=cfg.text_feature_dim,
                 embedding_dim=cfg.embedding_dim,
             )
         else:
+            # Fall back if no text features are used
             self.item_text_features = None
             self.text_encoder = None
 
     # ---------------------------------------------------------
-    # NEW: Build initial item representations
-    # This is the key text-augmented difference
+    # 4. Initial item representations
+    # Combines learned item embeddings with projected text features.
     # ---------------------------------------------------------
+    # Build item representations before graph propagation
     def get_initial_item_repr(self) -> torch.Tensor:
-        """
-        Build the initial item representation before graph propagation.
-
-        If text features are available:
-            initial_item = learned_item_embedding + projected_text_embedding
-
-        Otherwise:
-            initial_item = learned_item_embedding
-        """
-        # SAME AS ORIGINAL LIGHTGCN:
-        # start from normal learned item embeddings
+        # Start from the normal learned item embeddings
         learned_item_repr = self.item_emb.weight
 
-        # If no text features exist, fall back to normal LightGCN behaviour
+        # Return the normal item embeddings if no text is used
         if not self.has_text_features or self.text_encoder is None:
             return learned_item_repr
 
-        # NEW:
-        # project joke text vectors into embedding space
+        # Project joke text features into embedding space
         text_item_repr = self.text_encoder(self.item_text_features)
 
-        # NEW:
-        # combine learned item embeddings with projected text embeddings
+        # Add projected text features to the learned item embeddings
         return learned_item_repr + text_item_repr
 
     # ---------------------------------------------------------
-    # SAME AS ORIGINAL LIGHTGCN:
-    # graph propagation and layer averaging
+    # 5. Graph propagation
+    # Runs LightGCN message passing and layer averaging.
     # ---------------------------------------------------------
+    # Propagate embeddings through the normalised graph
     def propagate(self, norm_adj: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Run LightGCN propagation over the normalised user-item graph.
-
-        Steps:
-        1) build initial user and item representations
-        2) combine them into one matrix
-        3) propagate through the graph for several layers
-        4) average all layer outputs
-        5) split back into user and item embeddings
-        """
-
-        # SAME AS ORIGINAL LIGHTGCN:
-        # normal trainable user embeddings
+        # Get the initial user embeddings
         user_init = self.user_emb.weight
 
-        # DIFFERENCE:
-        # item side may include added text information
+        # Get the initial item embeddings
         item_init = self.get_initial_item_repr()
 
-        # Combine users and items into one matrix for propagation
+        # Combine user and item embeddings into one matrix
         all_emb = torch.cat([user_init, item_init], dim=0)
 
-        # Store layer 0 embeddings before propagation
+        # Store the layer 0 embeddings
         embs = [all_emb]
 
-        # SAME AS ORIGINAL LIGHTGCN:
-        # repeated graph propagation
+        # Repeatedly propagate through the graph
         for _ in range(self.cfg.num_layers):
             all_emb = torch.sparse.mm(norm_adj, all_emb)
             embs.append(all_emb)
 
-        # SAME AS ORIGINAL LIGHTGCN:
-        # average embeddings from all layers
+        # Average embeddings across all layers
         out = torch.stack(embs, dim=0).mean(dim=0)
 
-        # Split back into final user and item embeddings
+        # Split the combined matrix back into users and items
         users_out = out[: self.cfg.num_users]
         items_out = out[self.cfg.num_users:]
+
         return users_out, items_out
 
     # ---------------------------------------------------------
-    # SAME AS ORIGINAL LIGHTGCN:
-    # BPR loss for pairwise ranking
+    # 6. BPR loss
+    # Computes the pairwise ranking loss used for training.
     # ---------------------------------------------------------
     @staticmethod
     def bpr_loss(
@@ -238,17 +176,10 @@ class LightGCN(nn.Module):
         pos: torch.Tensor,
         neg: torch.Tensor,
     ) -> torch.Tensor:
-        """
-        Compute Bayesian Personalised Ranking (BPR) loss.
-
-        The goal is to make the positive item score higher
-        than the negative item score for the same user.
-        """
-
-        # Score the user against a positive item
+        # Compute scores for positive items
         pos_scores = (u * pos).sum(dim=1)
 
-        # Score the user against a negative item
+        # Compute scores for negative items
         neg_scores = (u * neg).sum(dim=1)
 
         # Encourage positive items to rank above negative items

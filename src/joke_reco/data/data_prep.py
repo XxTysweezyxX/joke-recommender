@@ -1,13 +1,8 @@
 from __future__ import annotations
 
 """
-Data preparation helpers for the Jester dataset.
-
-Purpose:
-- Load raw Jester ratings data
-- Load raw joke text data
-- Apply basic cleaning to the ratings data
-- Save processed outputs for later stages of the pipeline
+Prepares the Jester dataset for the recommendation pipeline.
+Loads raw ratings and joke text, applies basic cleaning, and saves processed CSV files.
 """
 
 from pathlib import Path
@@ -15,62 +10,45 @@ import pandas as pd
 
 
 # ---------------------------------------------------------
-# Helper: load raw Jester interaction data
+# 1. Raw ratings loading
+# Loads the raw Jester interaction data from CSV.
 # ---------------------------------------------------------
 def load_jester_edges(edges_csv: Path) -> pd.DataFrame:
-    """
-    Load the long-format Jester ratings / edges CSV.
-
-    Expected columns usually look like:
-    - user_id
-    - joke_id
-    - rating
-    """
+    # Load the raw ratings file
     df = pd.read_csv(edges_csv)
+
     return df
 
 
 # ---------------------------------------------------------
-# Helper: load raw Jester joke text data
+# 2. Raw joke text loading
+# Loads the raw Jester joke text data from CSV.
 # ---------------------------------------------------------
 def load_jester_jokes(jokes_csv: Path) -> pd.DataFrame:
-    """
-    Load the jokes text CSV.
-
-    Expected columns usually look like:
-    - joke_id
-    - joke_text
-    """
+    # Load the raw joke text file
     df = pd.read_csv(jokes_csv)
+
     return df
 
 
 # ---------------------------------------------------------
-# Helper: apply basic cleaning to ratings data
+# 3. Ratings cleaning
+# Applies basic cleaning to the interaction data.
 # ---------------------------------------------------------
 def basic_clean_edges(edges: pd.DataFrame) -> pd.DataFrame:
-    """
-    Apply basic cleanup to the interaction data.
-
-    Current cleaning step:
-    - remove rows with missing values
-
-    This keeps the dataset cleaner before saving it
-    as the processed interaction file.
-    """
+    # Remove rows with missing values
     edges = edges.dropna().copy()
+
     return edges
 
 
 # ---------------------------------------------------------
-# Helper: save dataframe to CSV
+# 4. CSV saving helper
+# Saves a dataframe to CSV and creates the folder if needed.
 # ---------------------------------------------------------
 def save_df(df: pd.DataFrame, out_path: Path) -> None:
-    """
-    Save a dataframe to CSV.
-
-    If the output folder does not exist yet,
-    create it first.
-    """
+    # Create the output folder if it does not exist
     out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Save the dataframe to CSV
     df.to_csv(out_path, index=False)

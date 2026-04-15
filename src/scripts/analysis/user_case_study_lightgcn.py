@@ -4,6 +4,13 @@ from __future__ import annotations
 Builds a user-level case study table for the original LightGCN model.
 Shows liked and disliked jokes for fixed users and compares them with model scores.
 """
+# AI-assisted file:
+# ChatGPT was used to help structure and refine this user case-study
+# file for the original LightGCN model.
+# Prompt summary: "Help me write a Python script that loads a trained
+# LightGCN model, selects fixed users, compares liked and disliked
+# jokes, computes user-joke scores, and builds a clean case-study
+# table with short joke previews for dissertation analysis."
 
 import pandas as pd
 import torch

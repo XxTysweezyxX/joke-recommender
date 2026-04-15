@@ -14,6 +14,14 @@ from joke_reco import config
 from joke_reco.text_augmented_lightgcn.build_joke_text_features import build_item_text_features
 from joke_reco.text_augmented_lightgcn.text_augmented_lightgcn import LightGCN, LightGCNConfig
 
+# AI-assisted file:
+# ChatGPT was used to help structure and refine this user case-study
+# file for the text-augmented LightGCN model.
+# Prompt summary: "Help me write a Python script that loads a trained
+# text-augmented LightGCN model, rebuilds joke text features,
+# selects fixed users, compares liked and disliked jokes, computes
+# user-joke scores, and builds a clean case-study table for
+# dissertation analysis."
 
 # ---------------------------------------------------------
 # 1. Settings
@@ -317,9 +325,7 @@ def main() -> None:
     # Combine all user tables into one dataframe
     final_df = pd.concat(all_tables, ignore_index=True)
 
-    # AI-assisted section:
-    # ChatGPT was used to help make the case-study output more presentable,
-    # including the shortened preview text and printed table layout.
+
 
     # Create shortened joke previews for printing
     final_df["joke_preview"] = (

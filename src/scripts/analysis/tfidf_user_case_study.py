@@ -4,6 +4,13 @@ from __future__ import annotations
 Builds a user-level case study table for the TF-IDF recommender.
 Shows liked and disliked jokes for fixed users and compares them with TF-IDF scores.
 """
+# AI-assisted file:
+# ChatGPT was used to help structure and refine this user case-study
+# file for the TF-IDF recommender.
+# Prompt summary: "Help me write a Python script that builds a TF-IDF
+# joke recommender, selects fixed users, compares liked and disliked
+# jokes, computes TF-IDF similarity scores for user-joke pairs, and
+# outputs a clean case-study table with shortened joke previews."
 
 import pandas as pd
 import numpy as np
